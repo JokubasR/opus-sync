@@ -33,6 +33,8 @@ SCOPE = "playlist-modify-public"
 
 YEAR_RE        = re.compile(r"\(\d{4}\)\s*$")      # strips “(2025)” from the tail
 ART_TITLE_RE   = re.compile(r"^\s*(.*?)\s*-\s*(.*?)\s*$")  # “Artist - Title”
+AND_RE         = re.compile(r"\band\b", re.I) # remove literal "and"
+MULTI_SPACE_RE = re.compile(r"\s{2,}")
 
 TICK  = "\u2705"   # ✅
 CROSS = "\u274C"   # ❌
@@ -214,6 +216,13 @@ def parse_records(records: List[Dict[str, Any]]) -> List[Tuple[datetime, str, st
 # Spotify helpers
 # ──────────────────────────────────────────────────────────────────────────────
 
+
+def clean_artist(a: str) -> str:
+    """Remove the word 'and' and collapse whitespace (case‑insensitive)."""
+    cleaned = AND_RE.sub("", a)
+    return MULTI_SPACE_RE.sub(" ", cleaned).strip()
+
+
 def search_track(sp, conn, artist: str, title: str, *, return_cache_flag=False):
 
     key = f"{artist.lower()} - {title.lower()}"
@@ -222,7 +231,9 @@ def search_track(sp, conn, artist: str, title: str, *, return_cache_flag=False):
     if uri:
         return (uri, True) if return_cache_flag else uri
 
-    res = sp.search(q=f'track:"{title}" artist:"{artist}"', type="track", limit=1)
+    artist_q = clean_artist(artist)
+
+    res = sp.search(q=f'track:"{title}" artist:"{artist_q}"', type="track", limit=1)
     items = res.get("tracks", {}).get("items", [])
     if items:
         uri = items[0]["uri"]
