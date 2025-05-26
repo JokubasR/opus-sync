@@ -1,0 +1,5 @@
+spotipy>=2.25
+requests
+python-dotenv
+sentry-sdk
+fuzzywuzzy[speedup]
