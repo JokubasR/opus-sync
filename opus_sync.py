@@ -24,6 +24,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 PLAYLIST_ID = os.environ["PLAYLIST_ID"]
+DNB_PLAYLIST_ID   = os.getenv("PLAYLIST_DNB_ID")
+
 VILNIUS_TZ = ZoneInfo("Europe/Vilnius")
 CUTOFF_HOURS = 72
 BATCH_SIZE = 100
@@ -49,6 +51,33 @@ CACHE_PATH = str(CACHE_DIR / CACHE_PATH)
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(levelname)s %(message)s")
+
+# ──────────────────────────────────────────────────────────────────────────────
+#   Drum‑and‑Bass detection helpers
+# ──────────────────────────────────────────────────────────────────────────────
+
+DNB_GENRE_KEYWORDS = {"drum and bass", "drum & bass", "dnb"}
+
+def is_dnb_track(sp: spotipy.Spotify, track: Dict[str, Any],
+                 *, artist_cache: dict[str, bool]) -> bool:
+    """
+    Heuristically decide whether the given track is Drum‑and‑Bass.
+    • Accept if any artist on the track has a genre matching DNB_GENRE_KEYWORDS.
+    The expensive sp.artist() calls are memoised in `artist_cache`.
+    """
+    for artist in track["artists"]:
+        aid = artist["id"]
+        if aid in artist_cache:
+            if artist_cache[aid]:
+                return True
+            continue
+
+        genres = sp.artist(aid)["genres"]
+        is_dnb = bool(set(g.lower() for g in genres) & DNB_GENRE_KEYWORDS)
+        artist_cache[aid] = is_dnb
+        if is_dnb:
+            return True
+    return False
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Helpers
@@ -163,17 +192,13 @@ def _parse_dt(dt_raw: Any) -> datetime | None:
 
     dt_raw = dt_raw.strip()
 
-    # 1) Current format: "2025.05.26 15:51"
+    # Current format: "2025.05.26 15:51"
     try:
         return datetime.strptime(dt_raw, "%Y.%m.%d %H:%M").replace(tzinfo=VILNIUS_TZ)
     except ValueError:
         pass
 
-    # 2) ISO-8601 or variant (fallback)
-    try:
-        return datetime.fromisoformat(dt_raw.replace("Z", "+00:00")).astimezone(VILNIUS_TZ)
-    except ValueError:
-        return None
+    return None
 
 
 def parse_records(records: List[Dict[str, Any]]) -> List[Tuple[datetime, str, str]]:
@@ -281,9 +306,9 @@ def add_new(sp, uris):
     return added
 
 
-def log_song(action: str, artist: str, title: str, note: str = "") -> None:
+def log_song(action: str, artist: str, title: str, note: str = "", is_dnb: bool = False) -> None:
     """Uniform per-song debug line."""
-    logging.info("%s %-35s – %-35s %s", action, artist[:35], title[:35], note)
+    logging.info("%s %-35s – %-35s %s %s", action, artist[:35], title[:35], note, "DnB" if is_dnb else "--")
 
 def log_mutation(action: str, n: int) -> None:
     """Uniform playlist mutation line."""
@@ -303,15 +328,18 @@ def main():
     records = parse_records(fetch_opus())
     logging.info("Fetched %d recent records", len(records))
 
-    new_uris, misses = [], []
+    new_uris, new_dnb_uris, misses = [], []
 
     for _, artist, title in records:
         uri, from_cache = search_track(sp, conn, artist, title, return_cache_flag=True)
 
         if uri:
             where = "CACHE" if from_cache else "SPOTIFY"
-            log_song(TICK, artist, title, f"found ({where})")
+            is_dnb = is_dnb_track(track)
+            log_song(TICK, artist, title, f"found ({where})", is_dnb)
             new_uris.append(uri)
+            if is_dnb
+                new_dnb_uris.append(uri)
         else:
             log_song(CROSS, artist, title, "not found")
             misses.append(f"{artist} – {title}")
