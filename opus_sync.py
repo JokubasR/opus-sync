@@ -311,7 +311,7 @@ def add_new(sp, uris, playlist_id: str):
 
 def log_song(action: str, artist: str, title: str, note: str = "", is_dnb: bool = False) -> None:
     """Uniform per-song debug line."""
-    logging.info("%s %-35s – %-35s %s-18s %s", action, artist[:35], title[:35], note, "DnB" if is_dnb else "--")
+    logging.info("%s %-35s – %-35s %-18s %s", action, artist[:35], title[:35], note, "DnB" if is_dnb else "--")
 
 def log_mutation(action: str, n: int, playlist_type: str = "main") -> None:
     """Uniform playlist mutation line."""

@@ -3,3 +3,4 @@ track_cache.sqlite3
 .env
 __pycache__/
 .DS_Store
+.idea
