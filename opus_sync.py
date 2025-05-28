@@ -1,5 +1,5 @@
-"""Synchronise LRT Opus recent playlist → public Spotify playlist.
-Runs once; schedule every 15 min with cron/systemd or loop container.
+"""Synchronise LRT Opus recent playlist → public Spotify playlist.
+Runs once; schedule every 15 min with cron/systemd or loop container.
 Resilient to minor API changes in the LRT JSON endpoint.
 """
 import os
@@ -24,17 +24,18 @@ from dotenv import load_dotenv
 load_dotenv()
 
 PLAYLIST_ID = os.environ["PLAYLIST_ID"]
-DNB_PLAYLIST_ID   = os.getenv("PLAYLIST_DNB_ID")
+DNB_PLAYLIST_ID = os.getenv("PLAYLIST_DNB_ID")
 
 VILNIUS_TZ = ZoneInfo("Europe/Vilnius")
 CUTOFF_HOURS = 72
+DNB_CUTOFF_HOURS = 24 * 7  # 7 days for DNB playlist
 BATCH_SIZE = 100
 CACHE_DB = "track_cache.sqlite3"
 CACHE_PATH = ".token-cache"  
 SCOPE = "playlist-modify-public"
 
-YEAR_RE        = re.compile(r"\(\d{4}\)\s*$")      # strips “(2025)” from the tail
-ART_TITLE_RE   = re.compile(r"^\s*(.*?)\s*-\s*(.*?)\s*$")  # “Artist - Title”
+YEAR_RE        = re.compile(r"\(\d{4}\)\s*$")      # strips "(2025)" from the tail
+ART_TITLE_RE   = re.compile(r"^\s*(.*?)\s*-\s*(.*?)\s*$")  # "Artist - Title"
 AND_RE         = re.compile(r"\band\b", re.I) # remove literal "and"
 MULTI_SPACE_RE = re.compile(r"\s{2,}")
 
@@ -151,11 +152,11 @@ def cache_store(conn, key, uri):
     conn.commit()
 
 # ──────────────────────────────────────────────────────────────────────────────
-# LRT Opus JSON handling (robust to schema drift)
+# LRT Opus JSON handling (robust to schema drift)
 # ──────────────────────────────────────────────────────────────────────────────
 
 def fetch_opus() -> List[Dict[str, Any]]:
-    """Download recent RDS payload from LRT Opus and return the raw list of items.
+    """Download recent RDS payload from LRT Opus and return the raw list of items.
     The endpoint occasionally changes field names; we try a few fall‑backs.
     """
     ts_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
@@ -215,14 +216,14 @@ def parse_records(records: List[Dict[str, Any]]) -> List[Tuple[datetime, str, st
         if not raw_song:
             continue
 
-        # Split on the *first* hyphen “Artist - Title”.
+        # Split on the *first* hyphen "Artist - Title".
         m = ART_TITLE_RE.match(raw_song)
         if not m:
-            # give up if we can’t recognise the pattern
+            # give up if we can't recognise the pattern
             continue
         artist, title = m.groups()
 
-        # Remove trailing “(2024)”
+        # Remove trailing "(2024)"
         title = YEAR_RE.sub("", title).strip()
 
         latest.append((ts, artist, title))
@@ -249,7 +250,6 @@ def clean_artist(a: str) -> str:
 
 
 def search_track(sp, conn, artist: str, title: str, *, return_cache_flag=False):
-
     key = f"{artist.lower()} - {title.lower()}"
 
     uri = cached_lookup(conn, key)
@@ -268,9 +268,10 @@ def search_track(sp, conn, artist: str, title: str, *, return_cache_flag=False):
     return (None, False) if return_cache_flag else None
 
 
-def playlist_snapshot(sp) -> List[Tuple[int, datetime, str]]:
+def playlist_snapshot(sp, playlist_id: str) -> List[Tuple[int, datetime, str]]:
+    """Get current playlist snapshot with positions, timestamps, and URIs."""
     items, pos = [], 0
-    page = sp.playlist_items(PLAYLIST_ID, additional_types=["track"])
+    page = sp.playlist_items(playlist_id, additional_types=["track"])
     while page:
         for it in page["items"]:
             added_at = datetime.fromisoformat(
@@ -282,8 +283,9 @@ def playlist_snapshot(sp) -> List[Tuple[int, datetime, str]]:
     return items
 
 
-def remove_old(sp, snapshot):
-    cutoff = datetime.now(tz=VILNIUS_TZ) - timedelta(hours=CUTOFF_HOURS)
+def remove_old(sp, snapshot, playlist_id: str, cutoff_hours: int = CUTOFF_HOURS):
+    """Remove tracks older than cutoff_hours from the playlist."""
+    cutoff = datetime.now(tz=VILNIUS_TZ) - timedelta(hours=cutoff_hours)
     removals = {}
     for idx, added_at, uri in snapshot:
         if added_at < cutoff:
@@ -294,27 +296,28 @@ def remove_old(sp, snapshot):
     for chunk in (
         payload[i : i + BATCH_SIZE] for i in range(0, len(payload), BATCH_SIZE)
     ):
-        sp.playlist_remove_specific_occurrences_of_items(PLAYLIST_ID, chunk)
+        sp.playlist_remove_specific_occurrences_of_items(playlist_id, chunk)
     return sum(len(p) for p in removals.values())
 
 
-def add_new(sp, uris):
+def add_new(sp, uris, playlist_id: str):
+    """Add new tracks to the playlist."""
     added = 0
     for chunk in (uris[i : i + BATCH_SIZE] for i in range(0, len(uris), BATCH_SIZE)):
-        sp.playlist_add_items(PLAYLIST_ID, chunk)
+        sp.playlist_add_items(playlist_id, chunk)
         added += len(chunk)
     return added
 
 
 def log_song(action: str, artist: str, title: str, note: str = "", is_dnb: bool = False) -> None:
     """Uniform per-song debug line."""
-    logging.info("%s %-35s – %-35s %s %s", action, artist[:35], title[:35], note, "DnB" if is_dnb else "--")
+    logging.info("%s %-35s – %-35s %s-18s %s", action, artist[:35], title[:35], note, "DnB" if is_dnb else "--")
 
-def log_mutation(action: str, n: int) -> None:
+def log_mutation(action: str, n: int, playlist_type: str = "main") -> None:
     """Uniform playlist mutation line."""
     if n:
         what = "added" if action == "ADD" else "removed"
-        logging.info("%s %d track%s", what.capitalize(), n, "" if n == 1 else "s")
+        logging.info("%s %d track%s (%s playlist)", what.capitalize(), n, "" if n == 1 else "s", playlist_type)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -328,39 +331,69 @@ def main():
     records = parse_records(fetch_opus())
     logging.info("Fetched %d recent records", len(records))
 
-    new_uris, new_dnb_uris, misses = [], []
+    new_uris, new_dnb_uris, misses = [], [], []
+    artist_cache = {}  # Cache for DNB detection
 
     for _, artist, title in records:
         uri, from_cache = search_track(sp, conn, artist, title, return_cache_flag=True)
 
         if uri:
             where = "CACHE" if from_cache else "SPOTIFY"
-            is_dnb = is_dnb_track(track)
+            
+            # Get track details for DNB detection
+            track = sp.track(uri)
+            is_dnb = is_dnb_track(sp, track, artist_cache=artist_cache)
+            
             log_song(TICK, artist, title, f"found ({where})", is_dnb)
             new_uris.append(uri)
-            if is_dnb
+            if is_dnb:
                 new_dnb_uris.append(uri)
         else:
             log_song(CROSS, artist, title, "not found")
             misses.append(f"{artist} – {title}")
 
-    snapshot_before = playlist_snapshot(sp)
-    removed = remove_old(sp, snapshot_before)
-    log_mutation("REM", removed)
+    # Handle main playlist
+    snapshot_before = playlist_snapshot(sp, PLAYLIST_ID)
+    removed = remove_old(sp, snapshot_before, PLAYLIST_ID)
+    log_mutation("REM", removed, "main")
 
-    snapshot = snapshot_before if removed == 0 else playlist_snapshot(sp)
+    snapshot = snapshot_before if removed == 0 else playlist_snapshot(sp, PLAYLIST_ID)
     current_uris = {uri for _, _, uri in snapshot}
 
     to_add = [u for u in new_uris if u not in current_uris]
-    added = add_new(sp, to_add)
-    log_mutation("ADD", added)
+    added = add_new(sp, to_add, PLAYLIST_ID)
+    log_mutation("ADD", added, "main")
+
+    # Handle DNB playlist if configured
+    dnb_added, dnb_removed = 0, 0
+    if DNB_PLAYLIST_ID and new_dnb_uris:
+        dnb_snapshot_before = playlist_snapshot(sp, DNB_PLAYLIST_ID)
+        dnb_removed = remove_old(sp, dnb_snapshot_before, DNB_PLAYLIST_ID, DNB_CUTOFF_HOURS)
+        log_mutation("REM", dnb_removed, "DNB")
+
+        dnb_snapshot = dnb_snapshot_before if dnb_removed == 0 else playlist_snapshot(sp, DNB_PLAYLIST_ID)
+        dnb_current_uris = {uri for _, _, uri in dnb_snapshot}
+
+        dnb_to_add = [u for u in new_dnb_uris if u not in dnb_current_uris]
+        dnb_added = add_new(sp, dnb_to_add, DNB_PLAYLIST_ID)
+        log_mutation("ADD", dnb_added, "DNB")
 
     summary = (
         f"\n{RIGHT}  **SYNC SUMMARY**  {RIGHT}\n"
-        f"  Added      : {added}\n"
-        f"  Removed    : {removed}\n"
-        f"  Not found  : {len(misses)}\n"
+        f"  Main playlist:\n"
+        f"    Added      : {added}\n"
+        f"    Removed    : {removed}\n"
     )
+    
+    if DNB_PLAYLIST_ID:
+        summary += (
+            f"  DNB playlist:\n"
+            f"    Added      : {dnb_added}\n"
+            f"    Removed    : {dnb_removed}\n"
+        )
+    
+    summary += f"  Not found  : {len(misses)}\n"
+    
     logging.info(summary.rstrip())
     if misses:
         logging.info("Missing: %s", "; ".join(misses))
