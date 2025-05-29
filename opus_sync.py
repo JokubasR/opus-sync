@@ -36,6 +36,7 @@ CACHE_PATH = ".token-cache"
 SCOPE = "playlist-modify-public"
 
 YEAR_RE        = re.compile(r"\(\d{4}\)\s*$")      # strips "(2025)" from the tail
+FEAT_RE        = re.compile(r"\((?:feat|ft)\.?\s+.*?\)\s*", re.IGNORECASE)  # strips "(feat. Artist)" from title
 ART_TITLE_RE   = re.compile(r"^\s*(.*?)\s*-\s*(.*?)\s*$")  # "Artist - Title"
 AND_RE         = re.compile(r"\band\b", re.I) # remove literal "and"
 MULTI_SPACE_RE = re.compile(r"\s{2,}")
@@ -102,7 +103,7 @@ def is_dnb_track(sp: spotipy.Spotify, track: Dict[str, Any], conn) -> bool:
     """
     for artist in track["artists"]:
         aid = artist["id"]
-        
+
         # Check database cache first
         cached_genres = get_cached_artist_genres(conn, aid)
         if cached_genres is not None:
@@ -113,10 +114,10 @@ def is_dnb_track(sp: spotipy.Spotify, track: Dict[str, Any], conn) -> bool:
 
         # Not in cache, make API call
         genres = sp.artist(aid)["genres"]
-        
+
         # Cache the full genres list
         cache_artist_genres(conn, aid, genres)
-        
+
         # Check if it's DNB
         is_dnb = bool(set(g.lower() for g in genres) & DNB_GENRE_KEYWORDS)
         if is_dnb:
@@ -303,8 +304,9 @@ def parse_records(records: List[Dict[str, Any]]) -> List[Tuple[datetime, str, st
             continue
         artist, title = m.groups()
 
-        # Remove trailing "(2024)"
+        # Remove trailing "(2024)" and "(feat. Artist)" parts
         title = YEAR_RE.sub("", title).strip()
+        title = FEAT_RE.sub("", title).strip()
 
         latest.append((ts, artist, title))
 
@@ -400,11 +402,11 @@ def main():
 
         if uri:
             where = "CACHE" if from_cache else "SPOTIFY"
-            
+
             # Get track details for DNB detection
             track = sp.track(uri)
             is_dnb = is_dnb_track(sp, track, conn)
-            
+
             log_song(TICK, artist, title, f"found ({where})", is_dnb)
             new_uris.append(uri)
             if is_dnb:
@@ -445,16 +447,16 @@ def main():
         f"    Added      : {added}\n"
         f"    Removed    : {removed}\n"
     )
-    
+
     if DNB_PLAYLIST_ID:
         summary += (
             f"  DNB playlist:\n"
             f"    Added      : {dnb_added}\n"
             f"    Removed    : {dnb_removed}\n"
         )
-    
+
     summary += f"  Not found  : {len(misses)}\n"
-    
+
     logging.info(summary.rstrip())
     if misses:
         logging.info("Missing: %s", "; ".join(misses))
