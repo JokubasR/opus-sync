@@ -6,6 +6,7 @@ import os
 import logging
 import sqlite3
 import re
+import json
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -59,23 +60,65 @@ logging.basicConfig(level=logging.INFO,
 
 DNB_GENRE_KEYWORDS = {"drum and bass", "drum & bass", "dnb"}
 
-def is_dnb_track(sp: spotipy.Spotify, track: Dict[str, Any],
-                 *, artist_cache: dict[str, bool]) -> bool:
+def ensure_cache():
+    conn = sqlite3.connect(CACHE_DB)
+    conn.execute("CREATE TABLE IF NOT EXISTS tracks (key TEXT PRIMARY KEY, uri TEXT)")
+    # Add table for tracking songs not found in Spotify
+    conn.execute("""CREATE TABLE IF NOT EXISTS not_found (
+        key TEXT PRIMARY KEY, 
+        last_search_date TEXT
+    )""")
+    # Add table for caching artist genres
+    conn.execute("""CREATE TABLE IF NOT EXISTS artist_genres (
+        artist_id TEXT PRIMARY KEY, 
+        genres TEXT
+    )""")
+    conn.commit()
+    return conn
+
+
+def get_cached_artist_genres(conn, artist_id: str) -> List[str] | None:
+    """Get cached genres for an artist. Returns None if not cached."""
+    row = conn.execute("SELECT genres FROM artist_genres WHERE artist_id=?", (artist_id,)).fetchone()
+    if row and row[0]:
+        # Parse JSON array back to list
+        return json.loads(row[0])
+    return None
+
+
+def cache_artist_genres(conn, artist_id: str, genres: List[str]):
+    """Cache the genres for an artist."""
+    genres_json = json.dumps(genres)
+    conn.execute("INSERT OR REPLACE INTO artist_genres(artist_id, genres) VALUES (?, ?)", 
+                (artist_id, genres_json))
+    conn.commit()
+
+
+def is_dnb_track(sp: spotipy.Spotify, track: Dict[str, Any], conn) -> bool:
     """
     Heuristically decide whether the given track is Drum‑and‑Bass.
     • Accept if any artist on the track has a genre matching DNB_GENRE_KEYWORDS.
-    The expensive sp.artist() calls are memoised in `artist_cache`.
+    The expensive sp.artist() calls are cached in the database.
     """
     for artist in track["artists"]:
         aid = artist["id"]
-        if aid in artist_cache:
-            if artist_cache[aid]:
+        
+        # Check database cache first
+        cached_genres = get_cached_artist_genres(conn, aid)
+        if cached_genres is not None:
+            is_dnb = bool(set(g.lower() for g in cached_genres) & DNB_GENRE_KEYWORDS)
+            if is_dnb:
                 return True
             continue
 
+        # Not in cache, make API call
         genres = sp.artist(aid)["genres"]
+        
+        # Cache the full genres list
+        cache_artist_genres(conn, aid, genres)
+        
+        # Check if it's DNB
         is_dnb = bool(set(g.lower() for g in genres) & DNB_GENRE_KEYWORDS)
-        artist_cache[aid] = is_dnb
         if is_dnb:
             return True
     return False
@@ -135,11 +178,6 @@ def get_spotify() -> spotipy.Spotify:
     access_token = token_info["access_token"]
     return spotipy.Spotify(auth=access_token, requests_timeout=10)
 
-def ensure_cache():
-    conn = sqlite3.connect(CACHE_DB)
-    conn.execute("CREATE TABLE IF NOT EXISTS tracks (key TEXT PRIMARY KEY, uri TEXT)")
-    conn.commit()
-    return conn
 
 
 def cached_lookup(conn, key):
@@ -147,9 +185,51 @@ def cached_lookup(conn, key):
     return row[0] if row else None
 
 
+def is_recently_not_found(conn, key):
+    """Check if this song was searched today and not found."""
+    today = datetime.now(tz=VILNIUS_TZ).date().isoformat()
+    row = conn.execute("SELECT last_search_date FROM not_found WHERE key=?", (key,)).fetchone()
+    return row and row[0] == today
+
+
+def cache_not_found(conn, key):
+    """Mark this song as not found today."""
+    today = datetime.now(tz=VILNIUS_TZ).date().isoformat()
+    conn.execute("INSERT OR REPLACE INTO not_found(key, last_search_date) VALUES (?, ?)", (key, today))
+    conn.commit()
+
+
 def cache_store(conn, key, uri):
     conn.execute("INSERT OR REPLACE INTO tracks(key, uri) VALUES (?, ?)", (key, uri))
+    # Remove from not_found table if it exists (song was found now)
+    conn.execute("DELETE FROM not_found WHERE key=?", (key,))
     conn.commit()
+
+
+def search_track(sp, conn, artist: str, title: str, *, return_cache_flag=False):
+    key = f"{artist.lower()} - {title.lower()}"
+
+    # Check positive cache first
+    uri = cached_lookup(conn, key)
+    if uri:
+        return (uri, True) if return_cache_flag else uri
+
+    # Check if we already searched for this today and didn't find it
+    if is_recently_not_found(conn, key):
+        return (None, True) if return_cache_flag else None
+
+    artist_q = clean_artist(artist)
+
+    res = sp.search(q=f'track:"{title}" artist:"{artist_q}"', type="track", limit=1)
+    items = res.get("tracks", {}).get("items", [])
+    if items:
+        uri = items[0]["uri"]
+        cache_store(conn, key, uri)          # insert into SQLite
+        return (uri, False) if return_cache_flag else uri
+
+    # Cache that we didn't find this song today
+    cache_not_found(conn, key)
+    return (None, False) if return_cache_flag else None
 
 # ──────────────────────────────────────────────────────────────────────────────
 # LRT Opus JSON handling (robust to schema drift)
@@ -249,25 +329,6 @@ def clean_artist(a: str) -> str:
     return MULTI_SPACE_RE.sub(" ", cleaned).strip()
 
 
-def search_track(sp, conn, artist: str, title: str, *, return_cache_flag=False):
-    key = f"{artist.lower()} - {title.lower()}"
-
-    uri = cached_lookup(conn, key)
-    if uri:
-        return (uri, True) if return_cache_flag else uri
-
-    artist_q = clean_artist(artist)
-
-    res = sp.search(q=f'track:"{title}" artist:"{artist_q}"', type="track", limit=1)
-    items = res.get("tracks", {}).get("items", [])
-    if items:
-        uri = items[0]["uri"]
-        cache_store(conn, key, uri)          # insert into SQLite
-        return (uri, False) if return_cache_flag else uri
-
-    return (None, False) if return_cache_flag else None
-
-
 def playlist_snapshot(sp, playlist_id: str) -> List[Tuple[int, datetime, str]]:
     """Get current playlist snapshot with positions, timestamps, and URIs."""
     items, pos = [], 0
@@ -342,7 +403,7 @@ def main():
             
             # Get track details for DNB detection
             track = sp.track(uri)
-            is_dnb = is_dnb_track(sp, track, artist_cache=artist_cache)
+            is_dnb = is_dnb_track(sp, track, conn)
             
             log_song(TICK, artist, title, f"found ({where})", is_dnb)
             new_uris.append(uri)
