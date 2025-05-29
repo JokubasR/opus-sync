@@ -74,6 +74,12 @@ def ensure_cache():
         artist_id TEXT PRIMARY KEY, 
         genres TEXT
     )""")
+    # Add table for caching track DNB status
+    conn.execute("""CREATE TABLE IF NOT EXISTS track_dnb_status (
+        uri TEXT PRIMARY KEY,
+        is_dnb INTEGER,
+        track_data TEXT
+    )""")
     conn.commit()
     return conn
 
@@ -92,6 +98,24 @@ def cache_artist_genres(conn, artist_id: str, genres: List[str]):
     genres_json = json.dumps(genres)
     conn.execute("INSERT OR REPLACE INTO artist_genres(artist_id, genres) VALUES (?, ?)", 
                 (artist_id, genres_json))
+    conn.commit()
+
+
+def get_cached_track_dnb_status(conn, uri: str) -> Tuple[bool, Dict[str, Any]] | None:
+    """Get cached DNB status and track data for a track. Returns None if not cached."""
+    row = conn.execute("SELECT is_dnb, track_data FROM track_dnb_status WHERE uri=?", (uri,)).fetchone()
+    if row:
+        is_dnb = bool(row[0])
+        track_data = json.loads(row[1]) if row[1] else None
+        return (is_dnb, track_data)
+    return None
+
+
+def cache_track_dnb_status(conn, uri: str, is_dnb: bool, track_data: Dict[str, Any]):
+    """Cache the DNB status and track data for a track."""
+    track_data_json = json.dumps(track_data)
+    conn.execute("INSERT OR REPLACE INTO track_dnb_status(uri, is_dnb, track_data) VALUES (?, ?, ?)", 
+                (uri, int(is_dnb), track_data_json))
     conn.commit()
 
 
@@ -403,9 +427,19 @@ def main():
         if uri:
             where = "CACHE" if from_cache else "SPOTIFY"
 
-            # Get track details for DNB detection
-            track = sp.track(uri)
-            is_dnb = is_dnb_track(sp, track, conn)
+            # Check if we have DNB status cached
+            cached_dnb_info = get_cached_track_dnb_status(conn, uri)
+
+            if cached_dnb_info:
+                # Use cached DNB status and track data
+                is_dnb, track = cached_dnb_info
+                where += "+DNB_CACHE"
+            else:
+                # Get track details for DNB detection
+                track = sp.track(uri)
+                is_dnb = is_dnb_track(sp, track, conn)
+                # Cache the DNB status and track data
+                cache_track_dnb_status(conn, uri, is_dnb, track)
 
             log_song(TICK, artist, title, f"found ({where})", is_dnb)
             new_uris.append(uri)
