@@ -62,7 +62,15 @@ logging.basicConfig(level=logging.INFO,
 DNB_GENRE_KEYWORDS = {"drum and bass", "drum & bass", "dnb"}
 
 def ensure_cache():
-    conn = sqlite3.connect(CACHE_DB)
+    # Get the cache path from environment or use the module-level default
+    cache_dir = Path(os.getenv("CACHE_DIR", "/data"))
+    cache_db = os.getenv("CACHE_DB")
+
+    # If CACHE_DB is not set in environment, construct it from CACHE_DIR
+    if not cache_db:
+        cache_db = str(cache_dir / "track_cache.sqlite3")
+
+    conn = sqlite3.connect(cache_db)
     conn.execute("CREATE TABLE IF NOT EXISTS tracks (key TEXT PRIMARY KEY, uri TEXT)")
     # Add table for tracking songs not found in Spotify
     conn.execute("""CREATE TABLE IF NOT EXISTS not_found (
@@ -350,9 +358,9 @@ def parse_records(records: List[Dict[str, Any]]) -> List[Tuple[datetime, str, st
 
 
 def clean_artist(a: str) -> str:
-    """Remove the word 'and' and collapse whitespace (case‑insensitive)."""
+    """Remove the word 'and' and preserve whitespace (case‑insensitive)."""
     cleaned = AND_RE.sub("", a)
-    return MULTI_SPACE_RE.sub(" ", cleaned).strip()
+    return cleaned.strip()
 
 
 def playlist_snapshot(sp, playlist_id: str) -> List[Tuple[int, datetime, str]]:
