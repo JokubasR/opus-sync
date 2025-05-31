@@ -156,6 +156,21 @@ def is_dnb_track(sp: spotipy.Spotify, track: Dict[str, Any], conn) -> bool:
             return True
     return False
 
+def clear_track_dnb_status_cache(conn):
+    """
+    Clear all cached DNB status information to force re-evaluation with updated genre keywords.
+    
+    Parameters:
+        conn: sqlite3.Connection
+            The database connection object
+            
+    Returns:
+        int: Number of cache entries cleared
+    """
+    cursor = conn.execute("DELETE FROM track_dnb_status")
+    conn.commit()
+    return cursor.rowcount
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Helpers
 # ──────────────────────────────────────────────────────────────────────────────
@@ -452,6 +467,10 @@ def log_mutation(action: str, n: int, playlist_type: str = "main") -> None:
 def main():
     sp = get_spotify()
     conn = ensure_cache()
+
+    if os.getenv("CLEAR_DNB_CACHE", "").lower() in ("1", "true", "yes"):
+        cleared = clear_track_dnb_status_cache(conn)
+        logging.info("Cleared %d DNB status cache entries", cleared)
 
     records = parse_records(fetch_opus())
     logging.info("Fetched %d recent records", len(records))
