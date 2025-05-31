@@ -59,7 +59,7 @@ logging.basicConfig(level=logging.INFO,
 #   Drum‑and‑Bass detection helpers
 # ──────────────────────────────────────────────────────────────────────────────
 
-DNB_GENRE_KEYWORDS = {"drum and bass", "drum & bass", "dnb"}
+DNB_GENRE_KEYWORDS = {"drum and bass", "drum & bass", "dnb", "uk garage", "jungle"}
 
 def ensure_cache():
     # Get the cache path from environment or use the module-level default
