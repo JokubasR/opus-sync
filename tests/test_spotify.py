@@ -147,6 +147,85 @@ class TestSpotify(unittest.TestCase):
         mock_cache_not_found.assert_called_once_with(self.conn, "artist - title")
         self.sp.search.assert_called_once()
 
+    @patch('opus_sync.cached_lookup')
+    @patch('opus_sync.is_recently_not_found')
+    @patch('opus_sync.cache_store')
+    @patch('opus_sync.cache_not_found')
+    def test_search_track_fallback_to_first_artist(self, mock_cache_not_found, mock_cache_store, 
+                                                 mock_is_recently_not_found, mock_cached_lookup):
+        """Test search_track with fallback to first artist."""
+        # Setup mocks
+        mock_cached_lookup.return_value = None
+        mock_is_recently_not_found.return_value = False
+        
+        # Mock Spotify search response - first search fails, second succeeds
+        self.sp.search.side_effect = [
+            {"tracks": {"items": []}},  # No results with all artists
+            {"tracks": {"items": [{"uri": "spotify:track:789"}]}}  # Results with first artist
+        ]
+        
+        # Call the function with multiple artists
+        result = search_track(self.sp, self.conn, "Artist1, Artist2 and Artist3", "Title")
+        
+        # Verify the result
+        self.assertEqual(result, "spotify:track:789")
+        
+        # Verify the mocks were called correctly
+        mock_cached_lookup.assert_called_once()
+        mock_is_recently_not_found.assert_called_once()
+        mock_cache_store.assert_called_once()
+        mock_cache_not_found.assert_not_called()
+        
+        # Verify search was called twice with different queries
+        self.assertEqual(self.sp.search.call_count, 2)
+        first_call = self.sp.search.call_args_list[0][1]['q']
+        second_call = self.sp.search.call_args_list[1][1]['q']
+        
+        # First call should include all artists, second only the first artist
+        self.assertIn("Artist1, Artist2  Artist3", first_call)  # Note: "and" is removed by clean_artist
+        self.assertIn("Artist1", second_call)
+        self.assertNotIn("Artist2", second_call)
+        self.assertNotIn("Artist3", second_call)
+
+    @patch('opus_sync.cached_lookup')
+    @patch('opus_sync.is_recently_not_found')
+    @patch('opus_sync.cache_store')
+    @patch('opus_sync.cache_not_found')
+    def test_search_track_fallback_to_first_artist_real_example(self, mock_cache_not_found, mock_cache_store, 
+                                                         mock_is_recently_not_found, mock_cached_lookup):
+        """Test search_track with fallback to first artist using a real example."""
+        # Setup mocks
+        mock_cached_lookup.return_value = None
+        mock_is_recently_not_found.return_value = False
+        
+        # Mock Spotify search response - first search fails, second succeeds
+        self.sp.search.side_effect = [
+            {"tracks": {"items": []}},  # No results with "So1o and SLJ"
+            {"tracks": {"items": [{"uri": "spotify:track:solo123"}]}}  # Results with just "So1o"
+        ]
+        
+        # Call the function with the real example
+        result = search_track(self.sp, self.conn, "So1o and SLJ", "Example Track")
+        
+        # Verify the result
+        self.assertEqual(result, "spotify:track:solo123")
+        
+        # Verify the mocks were called correctly
+        mock_cached_lookup.assert_called_once()
+        mock_is_recently_not_found.assert_called_once()
+        mock_cache_store.assert_called_once()
+        mock_cache_not_found.assert_not_called()
+        
+        # Verify search was called twice with different queries
+        self.assertEqual(self.sp.search.call_count, 2)
+        first_call = self.sp.search.call_args_list[0][1]['q']
+        second_call = self.sp.search.call_args_list[1][1]['q']
+        
+        # First call should include both artists, second only So1o
+        self.assertIn('artist:"So1o  SLJ"', first_call)  # "and" is removed by clean_artist
+        self.assertIn('artist:"So1o"', second_call)
+        self.assertNotIn('SLJ', second_call)
+
     def test_playlist_snapshot_pagination(self):
         """Test playlist_snapshot function with pagination."""
         # Mock Spotify playlist_items response with pagination

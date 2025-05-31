@@ -253,8 +253,20 @@ def search_track(sp, conn, artist: str, title: str, *, return_cache_flag=False):
 
     artist_q = clean_artist(artist)
 
+    # First attempt: search with all artists
     res = sp.search(q=f'track:"{title}" artist:"{artist_q}"', type="track", limit=1)
     items = res.get("tracks", {}).get("items", [])
+    
+    # If nlo results and there are multipe artists (contains commas or 'and')
+    if not items and (',' in artist or ' and ' in artist.lower() or ' & ' in artist):
+        # Extract first artist (before first comma or 'and')
+        first_artist = artist.split(',')[0].split(' and ')[0].split(' & ')[0].strip()
+        first_artist_q = clean_artist(first_artist)
+        
+        # Try again with just the first artist
+        res = sp.search(q=f'track:"{title}" artist:"{first_artist_q}"', type="track", limit=1)
+        items = res.get("tracks", {}).get("items", [])
+    
     if items:
         uri = items[0]["uri"]
         cache_store(conn, key, uri)          # insert into SQLite
