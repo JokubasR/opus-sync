@@ -29,7 +29,7 @@ DNB_PLAYLIST_ID = os.getenv("PLAYLIST_DNB_ID")
 
 VILNIUS_TZ = ZoneInfo("Europe/Vilnius")
 CUTOFF_HOURS = 72
-DNB_CUTOFF_HOURS = 24 * 7  # 7 days for DNB playlist
+DNB_MAX_TRACKS = 100  # Keep 100 tracks in DNB playlist regardless of age
 BATCH_SIZE = 100
 CACHE_DB = "track_cache.sqlite3"
 CACHE_PATH = ".token-cache"  
@@ -392,15 +392,31 @@ def playlist_snapshot(sp, playlist_id: str) -> List[Tuple[int, datetime, str]]:
     return items
 
 
-def remove_old(sp, snapshot, playlist_id: str, cutoff_hours: int = CUTOFF_HOURS):
-    """Remove tracks older than cutoff_hours from the playlist."""
-    cutoff = datetime.now(tz=VILNIUS_TZ) - timedelta(hours=cutoff_hours)
+def remove_old(sp, snapshot, playlist_id: str, cutoff_hours: int = CUTOFF_HOURS, max_tracks: int = None):
+    """
+    Remove tracks from the playlist based on either:
+    - Tracks older than cutoff_hours (if max_tracks is None)
+    - Oldest tracks beyond max_tracks count (if max_tracks is specified)
+    """
     removals = {}
-    for idx, added_at, uri in snapshot:
-        if added_at < cutoff:
+    
+    if max_tracks is not None and len(snapshot) > max_tracks:
+        # Sort by timestamp (oldest first) and mark tracks beyond max_tracks for removal
+        sorted_snapshot = sorted(snapshot, key=lambda x: x[1])
+        tracks_to_remove = sorted_snapshot[:-max_tracks]  # Keep the newest max_tracks
+        
+        for idx, _, uri in tracks_to_remove:
             removals.setdefault(uri, []).append(idx)
+    else:
+        # Original time-based removal logic
+        cutoff = datetime.now(tz=VILNIUS_TZ) - timedelta(hours=cutoff_hours)
+        for idx, added_at, uri in snapshot:
+            if added_at < cutoff:
+                removals.setdefault(uri, []).append(idx)
+                
     if not removals:
         return 0
+        
     payload = [{"uri": uri, "positions": pos} for uri, pos in removals.items()]
     for chunk in (
         payload[i : i + BATCH_SIZE] for i in range(0, len(payload), BATCH_SIZE)
@@ -487,7 +503,7 @@ def main():
     dnb_added, dnb_removed = 0, 0
     if DNB_PLAYLIST_ID and new_dnb_uris:
         dnb_snapshot_before = playlist_snapshot(sp, DNB_PLAYLIST_ID)
-        dnb_removed = remove_old(sp, dnb_snapshot_before, DNB_PLAYLIST_ID, DNB_CUTOFF_HOURS)
+        dnb_removed = remove_old(sp, dnb_snapshot_before, DNB_PLAYLIST_ID, max_tracks=DNB_MAX_TRACKS)
         log_mutation("REM", dnb_removed, "DNB")
 
         dnb_snapshot = dnb_snapshot_before if dnb_removed == 0 else playlist_snapshot(sp, DNB_PLAYLIST_ID)

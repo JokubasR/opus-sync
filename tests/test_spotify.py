@@ -520,6 +520,109 @@ class TestSpotify(unittest.TestCase):
         mock_cache_artist_genres.assert_called_once_with(self.conn, "artist2", ["electronic", "dnb"])
         self.sp.artist.assert_called_once_with("artist2")
 
+    def test_remove_old_max_tracks(self):
+        """Test remove_old function with max_tracks parameter."""
+        # Create a snapshot with tracks of various ages
+        now = datetime.now(tz=VILNIUS_TZ)
+        
+        # Create 5 tracks with different timestamps (newest to oldest)
+        snapshot = [
+            (0, now - timedelta(hours=1), "spotify:track:newest"),
+            (1, now - timedelta(hours=24), "spotify:track:newer"),
+            (2, now - timedelta(hours=48), "spotify:track:middle"),
+            (3, now - timedelta(hours=72), "spotify:track:older"),
+            (4, now - timedelta(hours=96), "spotify:track:oldest")
+        ]
+        
+        # Call the function with max_tracks=3 (should keep the 3 newest tracks)
+        result = remove_old(self.sp, snapshot, "playlist_id", max_tracks=3)
+        
+        # Verify the result
+        self.assertEqual(result, 2)  # Should remove 2 oldest tracks
+        
+        # Verify the mock was called correctly
+        self.sp.playlist_remove_specific_occurrences_of_items.assert_called_once()
+        
+        # Get the call arguments
+        args, kwargs = self.sp.playlist_remove_specific_occurrences_of_items.call_args
+        
+        # Verify the playlist ID
+        self.assertEqual(args[0], "playlist_id")
+        
+        # Verify the tracks to remove
+        tracks_to_remove = args[1]
+        self.assertEqual(len(tracks_to_remove), 2)
+        
+        # Check that the correct tracks were removed (the 2 oldest)
+        uris = [item["uri"] for item in tracks_to_remove]
+        self.assertIn("spotify:track:older", uris)
+        self.assertIn("spotify:track:oldest", uris)
+        self.assertNotIn("spotify:track:newest", uris)
+        self.assertNotIn("spotify:track:newer", uris)
+        self.assertNotIn("spotify:track:middle", uris)
+        
+        # Check that positions are correct
+        positions = {item["uri"]: item["positions"] for item in tracks_to_remove}
+        self.assertEqual(positions["spotify:track:older"], [3])
+        self.assertEqual(positions["spotify:track:oldest"], [4])
+    
+    def test_remove_old_max_tracks_not_exceeded(self):
+        """Test remove_old function with max_tracks parameter when limit is not exceeded."""
+        # Create a snapshot with fewer tracks than the max
+        now = datetime.now(tz=VILNIUS_TZ)
+        
+        # Create 3 tracks with different timestamps
+        snapshot = [
+            (0, now - timedelta(hours=1), "spotify:track:newest"),
+            (1, now - timedelta(hours=24), "spotify:track:newer"),
+            (2, now - timedelta(hours=48), "spotify:track:oldest")
+        ]
+        
+        # Call the function with max_tracks=5 (should not remove any tracks)
+        result = remove_old(self.sp, snapshot, "playlist_id", max_tracks=5)
+        
+        # Verify the result
+        self.assertEqual(result, 0)  # Should not remove any tracks
+        
+        # Verify the mock was not called
+        self.sp.playlist_remove_specific_occurrences_of_items.assert_not_called()
+    
+    def test_remove_old_both_criteria(self):
+        """Test remove_old function with both time cutoff and max_tracks."""
+        # Create a snapshot with tracks of various ages
+        now = datetime.now(tz=VILNIUS_TZ)
+        cutoff_time = now - timedelta(hours=50)  # Cutoff at 50 hours
+        
+        # Create 5 tracks with different timestamps (newest to oldest)
+        snapshot = [
+            (0, now - timedelta(hours=1), "spotify:track:newest"),
+            (1, now - timedelta(hours=24), "spotify:track:newer"),
+            (2, now - timedelta(hours=48), "spotify:track:middle"),
+            (3, now - timedelta(hours=72), "spotify:track:older"),
+            (4, now - timedelta(hours=96), "spotify:track:oldest")
+        ]
+        
+        # Call the function with both cutoff_hours=50 and max_tracks=4
+        # Should prioritize max_tracks and remove the oldest track
+        result = remove_old(self.sp, snapshot, "playlist_id", cutoff_hours=50, max_tracks=4)
+        
+        # Verify the result
+        self.assertEqual(result, 1)  # Should remove 1 track (the oldest)
+        
+        # Verify the mock was called correctly
+        self.sp.playlist_remove_specific_occurrences_of_items.assert_called_once()
+        
+        # Get the call arguments
+        args, kwargs = self.sp.playlist_remove_specific_occurrences_of_items.call_args
+        
+        # Verify the tracks to remove
+        tracks_to_remove = args[1]
+        self.assertEqual(len(tracks_to_remove), 1)
+        
+        # Check that the correct track was removed (the oldest)
+        self.assertEqual(tracks_to_remove[0]["uri"], "spotify:track:oldest")
+        self.assertEqual(tracks_to_remove[0]["positions"], [4])
+
 
 if __name__ == '__main__':
     unittest.main()
