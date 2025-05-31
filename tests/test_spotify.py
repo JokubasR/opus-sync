@@ -226,6 +226,46 @@ class TestSpotify(unittest.TestCase):
         self.assertIn('artist:"So1o"', second_call)
         self.assertNotIn('SLJ', second_call)
 
+    @patch('opus_sync.cached_lookup')
+    @patch('opus_sync.is_recently_not_found')
+    @patch('opus_sync.cache_store')
+    @patch('opus_sync.cache_not_found')
+    def test_search_track_vs_separator(self, mock_cache_not_found, mock_cache_store, 
+                                 mock_is_recently_not_found, mock_cached_lookup):
+        """Test search_track with artists separated by 'Vs'."""
+        # Setup mocks
+        mock_cached_lookup.return_value = None
+        mock_is_recently_not_found.return_value = False
+        
+        # Mock Spotify search response - first search fails, second succeeds
+        self.sp.search.side_effect = [
+            {"tracks": {"items": []}},  # No results with all artists
+            {"tracks": {"items": [{"uri": "spotify:track:killerz123"}]}}  # Results with just first artist
+        ]
+        
+        # Call the function with the example using 'Vs' separator
+        result = search_track(self.sp, self.conn, "Teddy Killerz Vs Serum Vs P_Money", "Example Track")
+        
+        # Verify the result
+        self.assertEqual(result, "spotify:track:killerz123")
+        
+        # Verify the mocks were called correctly
+        mock_cached_lookup.assert_called_once()
+        mock_is_recently_not_found.assert_called_once()
+        mock_cache_store.assert_called_once()
+        mock_cache_not_found.assert_not_called()
+        
+        # Verify search was called twice with different queries
+        self.assertEqual(self.sp.search.call_count, 2)
+        first_call = self.sp.search.call_args_list[0][1]['q']
+        second_call = self.sp.search.call_args_list[1][1]['q']
+        
+        # First call should include all artists, second only the first artist
+        self.assertIn('artist:"Teddy Killerz Vs Serum Vs P_Money"', first_call)
+        self.assertIn('artist:"Teddy Killerz"', second_call)
+        self.assertNotIn('Serum', second_call)
+        self.assertNotIn('P_Money', second_call)
+
     def test_playlist_snapshot_pagination(self):
         """Test playlist_snapshot function with pagination."""
         # Mock Spotify playlist_items response with pagination
