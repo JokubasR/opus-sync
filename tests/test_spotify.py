@@ -33,7 +33,8 @@ class TestSpotify(unittest.TestCase):
         self.assertEqual(clean_artist("Artist AND Band"), "Artist  Band")
         self.assertEqual(clean_artist("Artist  and  Band"), "Artist    Band")
         self.assertEqual(clean_artist("Artist"), "Artist")
-    
+        self.assertEqual(clean_artist("GandG Sindikatas"), "G&G Sindikatas")
+
     @patch('opus_sync.cached_lookup')
     @patch('opus_sync.is_recently_not_found')
     @patch('opus_sync.cache_store')

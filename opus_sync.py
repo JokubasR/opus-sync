@@ -359,6 +359,8 @@ def parse_records(records: List[Dict[str, Any]]) -> List[Tuple[datetime, str, st
 
 def clean_artist(a: str) -> str:
     """Remove the word 'and' and preserve whitespace (case‑insensitive)."""
+    if "GandG" in a:
+        a = a.replace("GandG", "G&G")
     cleaned = AND_RE.sub("", a)
     return cleaned.strip()
 
