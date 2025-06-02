@@ -266,6 +266,46 @@ class TestSpotify(unittest.TestCase):
         self.assertNotIn('Serum', second_call)
         self.assertNotIn('P_Money', second_call)
 
+    @patch('opus_sync.cached_lookup')
+    @patch('opus_sync.is_recently_not_found')
+    @patch('opus_sync.cache_store')
+    @patch('opus_sync.cache_not_found')
+    def test_search_track_slash_separator(self, mock_cache_not_found, mock_cache_store, 
+                                     mock_is_recently_not_found, mock_cached_lookup):
+        """Test search_track with slash-separated artists."""
+        # Setup mocks
+        mock_cached_lookup.return_value = None
+        mock_is_recently_not_found.return_value = False
+        
+        # Mock Spotify search responses
+        self.sp.search.side_effect = [
+            # First search with full artist name fails
+            {"tracks": {"items": []}},
+            # Second search with just the first artist succeeds
+            {"tracks": {"items": [{"uri": "spotify:track:123"}]}}
+        ]
+        
+        # Call the function with slash-separated artists
+        result = search_track(self.sp, self.conn, "GOAT/MC YALLAH", "Test Title")
+        
+        # Verify the result
+        self.assertEqual(result, "spotify:track:123")
+        
+        # Verify the search calls
+        self.assertEqual(self.sp.search.call_count, 2)
+        
+        # Check first call used full artist name
+        first_call = self.sp.search.call_args_list[0][1]
+        self.assertIn("GOAT/MC YALLAH", first_call["q"])
+        
+        # Check second call used only first artist
+        second_call = self.sp.search.call_args_list[1][1]
+        self.assertIn("GOAT", second_call["q"])
+        self.assertNotIn("MC YALLAH", second_call["q"])
+        
+        # Verify the cache was updated
+        mock_cache_store.assert_called_once_with(self.conn, "goat/mc yallah - test title", "spotify:track:123")
+
     def test_playlist_snapshot_pagination(self):
         """Test playlist_snapshot function with pagination."""
         # Mock Spotify playlist_items response with pagination

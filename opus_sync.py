@@ -272,10 +272,10 @@ def search_track(sp, conn, artist: str, title: str, *, return_cache_flag=False):
     res = sp.search(q=f'track:"{title}" artist:"{artist_q}"', type="track", limit=1)
     items = res.get("tracks", {}).get("items", [])
     
-    # If nlo results and there are multipe artists (contains commas or 'and')
-    if not items and (',' in artist or ' and ' in artist.lower() or ' & ' in artist or ' Vs ' in artist):
-        # Extract first artist (before first comma or 'and')
-        first_artist = artist.split(',')[0].split(' and ')[0].split(' & ')[0].split(' Vs ')[0].strip()
+    # If no results and there are multiple artists (contains commas, 'and', '&', 'Vs', or '/')
+    if not items and (',' in artist or ' and ' in artist.lower() or ' & ' in artist or ' Vs ' in artist or '/' in artist):
+        # Extract first artist (before first comma, 'and', '&', 'Vs', or '/')
+        first_artist = artist.split(',')[0].split(' and ')[0].split(' & ')[0].split(' Vs ')[0].split('/')[0].strip()
         first_artist_q = clean_artist(first_artist)
         
         # Try again with just the first artist
