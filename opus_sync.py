@@ -414,9 +414,13 @@ def remove_old(sp, snapshot, playlist_id: str, cutoff_hours: int = CUTOFF_HOURS,
     - Tracks older than cutoff_hours (if max_tracks is None)
     - Oldest tracks beyond max_tracks count (if max_tracks is specified)
     """
+    # For DNB playlist: Don't remove anything if we have fewer than max_tracks
+    if max_tracks is not None and len(snapshot) <= max_tracks:
+        return 0
+        
     removals = {}
     
-    if max_tracks is not None and len(snapshot) > max_tracks:
+    if max_tracks is not None:
         # Sort by timestamp (oldest first) and mark tracks beyond max_tracks for removal
         sorted_snapshot = sorted(snapshot, key=lambda x: x[1])
         tracks_to_remove = sorted_snapshot[:-max_tracks]  # Keep the newest max_tracks
