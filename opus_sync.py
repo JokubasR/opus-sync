@@ -267,9 +267,10 @@ def search_track(sp, conn, artist: str, title: str, *, return_cache_flag=False):
         return (None, True) if return_cache_flag else None
 
     artist_q = clean_artist(artist)
+    title_q = clean_artist(title)
 
     # First attempt: search with all artists
-    res = sp.search(q=f'track:"{title}" artist:"{artist_q}"', type="track", limit=1)
+    res = sp.search(q=f'track:"{title_q}" artist:"{artist_q}"', type="track", limit=1)
     items = res.get("tracks", {}).get("items", [])
     
     # If no results and there are multiple artists (contains commas, 'and', '&', 'Vs', or '/')
@@ -279,7 +280,7 @@ def search_track(sp, conn, artist: str, title: str, *, return_cache_flag=False):
         first_artist_q = clean_artist(first_artist)
         
         # Try again with just the first artist
-        res = sp.search(q=f'track:"{title}" artist:"{first_artist_q}"', type="track", limit=1)
+        res = sp.search(q=f'track:"{title_q}" artist:"{first_artist_q}"', type="track", limit=1)
         items = res.get("tracks", {}).get("items", [])
     
     if items:
